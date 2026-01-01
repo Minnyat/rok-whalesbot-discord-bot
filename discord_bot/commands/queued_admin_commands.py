@@ -342,7 +342,8 @@ def setup_queued_admin_commands(
         await ctx.defer(ephemeral=True)
 
         # Grant subscription
-        result = subscription_service.grant_subscription(str(user.id), days)
+        discord_name = f"{user.name} ({user.display_name})"
+        result = subscription_service.grant_subscription(str(user.id), discord_name, days)
 
         # Log action
         data_manager.log_action(
