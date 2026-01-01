@@ -310,7 +310,11 @@ class DataManager:
         
         with self._logs_lock:
             data = self._read_json(self.logs_file)
-            logs = data.get('logs', [])
+            if isinstance(data, list):
+                logs = data
+                data = {'logs': logs}
+            else:
+                logs = data.get('logs', [])
             
             logs.insert(0, log_entry.to_dict())  # Add to beginning
             
