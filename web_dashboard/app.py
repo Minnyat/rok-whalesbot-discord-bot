@@ -3,7 +3,9 @@ Flask application for WhaleBots web dashboard.
 """
 
 import os
-from flask import Flask, render_template
+import json
+from flask import Flask, render_template, request, jsonify
+from werkzeug.exceptions import HTTPException
 from datetime import timedelta
 
 from shared.data_manager import DataManager
@@ -81,6 +83,33 @@ def create_app(whalebots_path: str = None) -> Flask:
     def emulator_health_page():
         """Emulator health monitoring page."""
         return render_template('emulator_health.html')
+
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        # Pass through HTTP errors
+        if isinstance(e, HTTPException):
+            if request.path.startswith('/api/'):
+                response = e.get_response()
+                response.data = json.dumps({
+                    "code": e.code,
+                    "name": e.name,
+                    "description": e.description,
+                })
+                response.content_type = "application/json"
+                return response
+            return e
+
+        # Handle non-HTTP exceptions only
+        app.logger.error(f"Unhandled exception: {e}", exc_info=True)
+        
+        if request.path.startswith('/api/'):
+            return jsonify({
+                "success": False, 
+                "error": str(e),
+                "message": "Internal Server Error"
+            }), 500
+            
+        return "Internal Server Error", 500
 
     return app
 

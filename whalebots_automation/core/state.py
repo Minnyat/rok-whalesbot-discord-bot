@@ -372,6 +372,15 @@ class EmulatorStateManager:
             if not isinstance(accounts, list):
                 raise ValidationError("Accounts file must contain an array")
 
+            # Filter out non-dictionary entries
+            valid_accounts = []
+            for i, acc in enumerate(accounts):
+                if isinstance(acc, dict):
+                    valid_accounts.append(acc)
+                else:
+                    self.logger.warning(f"Account at index {i} is not a dictionary, skipping")
+            accounts = valid_accounts
+
             self.logger.debug(f"Read {len(accounts)} accounts from Accounts.json")
             self.logger.log_operation_end(operation_id, success=True)
             return accounts
@@ -420,6 +429,11 @@ class EmulatorStateManager:
         # Combine the data
         for i, account in enumerate(accounts):
             try:
+                # Validate account is a dictionary
+                if not isinstance(account, dict):
+                    self.logger.warning(f"Account at index {i} is not a dictionary (got {type(account).__name__}), skipping")
+                    continue
+                    
                 emulator_info_data = account.get('emuInfo', {})
                 state_value = last_state[i] if i < len(last_state) else 0
 
