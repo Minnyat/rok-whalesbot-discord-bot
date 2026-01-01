@@ -106,6 +106,8 @@ class DataManager:
         """
         with self._users_lock:
             data = self._read_json(self.users_file)
+            if isinstance(data, list):
+                data = {"users": {}}
             users = data.get('users', {})
             
             if discord_id in users:
@@ -121,6 +123,8 @@ class DataManager:
         """
         with self._users_lock:
             data = self._read_json(self.users_file)
+            if isinstance(data, list):
+                data = {"users": {}}
             users = data.get('users', {})
             
             users[user.discord_id] = user.to_dict()
@@ -140,6 +144,8 @@ class DataManager:
         """
         with self._users_lock:
             data = self._read_json(self.users_file)
+            if isinstance(data, list):
+                data = {"users": {}}
             users = data.get('users', {})
             
             if discord_id in users:
@@ -158,6 +164,8 @@ class DataManager:
         """
         with self._users_lock:
             data = self._read_json(self.users_file)
+            if isinstance(data, list):
+                data = {"users": {}}
             users = data.get('users', {})
             
             return [User.from_dict(user_data) for user_data in users.values()]
