@@ -331,7 +331,10 @@ class DataManager:
         """
         with self._logs_lock:
             data = self._read_json(self.logs_file)
-            logs = data.get('logs', [])
+            if isinstance(data, list):
+                logs = data
+            else:
+                logs = data.get('logs', [])
             
             # Filter by user if specified
             if user_id:
@@ -354,7 +357,10 @@ class DataManager:
         """
         with self._logs_lock:
             data = self._read_json(self.logs_file)
-            logs = data.get('logs', [])
+            if isinstance(data, list):
+                logs = data
+            else:
+                logs = data.get('logs', [])
             
             if user_id:
                 logs = [log for log in logs if log.get('user_id') == user_id]
