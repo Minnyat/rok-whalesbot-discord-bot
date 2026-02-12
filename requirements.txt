@@ -3,9 +3,11 @@ py-cord>=2.6.0
 Flask>=2.0.0
 python-dotenv>=1.0.0
 
-# Windows System Integration
-pywin32>=305
+# System Integration
 psutil>=5.8.0
+# pywin32 is Windows-only; install manually on Windows:
+#   pip install pywin32>=305
+pywin32>=305; sys_platform == "win32"
 
 # Timezone
 pytz>=2023.3

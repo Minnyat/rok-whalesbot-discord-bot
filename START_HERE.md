@@ -11,11 +11,23 @@ Make sure you have:
 
 ### 2. Run automated setup
 
+**Windows:**
+```bash
+setup.bat
+```
+
+**Linux/macOS:**
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+**Or cross-platform (Python):**
 ```bash
 python setup_system.py
 ```
 
-This command creates the `.venv` virtual environment, installs the Python dependencies, and scaffolds all required JSON files using UTF-8 so multilingual text (Chinese, Korean, Japanese, etc.) is preserved.
+This creates the `.venv` virtual environment, installs the Python dependencies, and scaffolds all required JSON files using UTF-8 so multilingual text (Chinese, Korean, Japanese, etc.) is preserved.
 
 ### 3. Configure Environment
 
@@ -49,15 +61,16 @@ Notes: the JSON files are saved with UTF-8 encoding, so you can safely store nam
 ### 5. Run the System
 
 **Option A: Run both (Recommended)**
+
+Windows:
 ```bash
 run.bat
 ```
 
-The batch script automatically uses the `.venv` interpreter if it exists.
-
-This will open 2 windows:
-- Discord Bot window
-- Web Dashboard window
+Linux/macOS:
+```bash
+./run.sh
+```
 
 **Option B: Run separately**
 
@@ -152,8 +165,14 @@ Access: http://127.0.0.1:5000
 
 ## Stop the System
 
+Windows:
 ```bash
 stop.bat
+```
+
+Linux/macOS:
+```bash
+./stop.sh
 ```
 
 Or press `Ctrl+C` in each terminal window.
@@ -171,8 +190,13 @@ WhaleBots_1013/
 │   └── audit_logs.json
 ├── whalebots_automation/  - WhaleBots integration
 ├── .env                   - Configuration (DO NOT COMMIT)
-├── run.bat               - Start everything
-├── stop.bat              - Stop everything
+├── run.bat               - Start everything (Windows)
+├── run.sh                - Start everything (Linux/macOS)
+├── setup.bat             - Setup (Windows)
+├── setup.sh              - Setup (Linux/macOS)
+├── setup_system.py       - Cross-platform setup
+├── stop.bat              - Stop everything (Windows)
+├── stop.sh               - Stop everything (Linux/macOS)
 ├── run_bot.py            - Bot launcher
 └── run_dashboard.py      - Dashboard launcher
 ```
@@ -193,5 +217,5 @@ Check the plan file for full documentation: `discord-bot-web.plan.md`
 
 **Ready to use!** 🚀
 
-Just run `run.bat` and start managing your WhaleBots!
+Just run `run.bat` (Windows) or `./run.sh` (Linux/macOS) and start managing your WhaleBots!
 

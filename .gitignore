@@ -25,9 +25,14 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
 ENV/
 env/
 discord_bot_env/
+
+# PID files (Linux launcher)
+.bot.pid
+.dash.pid
 
 # Data files
 data/*.json
