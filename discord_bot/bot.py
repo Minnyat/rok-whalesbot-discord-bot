@@ -212,7 +212,7 @@ class WhaleBotDiscord(discord.Bot):
 
                 # Log unhealthy emulators for debugging
                 for emulator in summary.emulators:
-                    if emulator.status != "healthy":
+                    if emulator.status.value != "healthy":
                         print(
                             f"[WARN] Unhealthy emulator '{emulator.name}' "
                             f"(index {emulator.index}): {emulator.issues}"
