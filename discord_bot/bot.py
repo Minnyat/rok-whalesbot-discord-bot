@@ -15,7 +15,7 @@ from discord_bot.services.bot_service import BotService
 from discord_bot.services.subscription_service import SubscriptionService
 from discord_bot.services.ui_operation_queue import UIOperationQueue
 from discord_bot.utils.permissions import init_permission_checker
-from discord_bot.commands.user_commands import setup_user_commands
+from discord_bot.commands.message_commands import setup_message_commands
 from discord_bot.commands.admin_commands import setup_admin_commands
 
 
@@ -32,9 +32,9 @@ class WhaleBotDiscord(discord.Bot):
         # Setup intents - only enable what we need
         intents = discord.Intents.default()
         intents.guilds = True
-        # Don't require privileged intents unless necessary
+        # Privileged intents
         # intents.members = True  # Only if you need member info
-        # intents.message_content = True  # Only if reading message content
+        intents.message_content = True  # Required for message-based user commands
         
         super().__init__(intents=intents, *args, **kwargs)
         
@@ -52,7 +52,7 @@ class WhaleBotDiscord(discord.Bot):
         init_permission_checker(self.data_manager)
         
         # Setup commands
-        setup_user_commands(self, self.bot_service, self.subscription_service, self.data_manager)
+        setup_message_commands(self, self.bot_service, self.subscription_service, self.data_manager)
         setup_admin_commands(self, self.bot_service, self.subscription_service, self.data_manager)
     
     async def on_ready(self):

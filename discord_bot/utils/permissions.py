@@ -51,6 +51,26 @@ class PermissionChecker:
         
         return True, None
     
+    def in_allowed_location_msg(self, message: discord.Message) -> tuple[bool, Optional[str]]:
+        """Check if a message is in an allowed location (guild/channel)."""
+        config = self.data_manager.get_config()
+
+        if not config.allowed_guilds and not config.allowed_channels:
+            return True, None
+
+        if config.allowed_guilds:
+            if not message.guild:
+                return False, "This command can only be used in allowed servers."
+
+            if str(message.guild.id) not in config.allowed_guilds:
+                return False, "This server is not allowed to use the bot."
+
+        if config.allowed_channels:
+            if str(message.channel.id) not in config.allowed_channels:
+                return False, "This channel is not allowed to use the bot."
+
+        return True, None
+
     def check_cooldown(self, user_id: str, cooldown_seconds: Optional[int] = None) -> tuple[bool, Optional[str]]:
         if cooldown_seconds is None:
             config = self.data_manager.get_config()
@@ -96,6 +116,10 @@ def is_admin(ctx: discord.ApplicationContext) -> bool:
 
 def in_allowed_channel(ctx: discord.ApplicationContext) -> tuple[bool, Optional[str]]:
     return get_permission_checker().in_allowed_location(ctx)
+
+
+def in_allowed_channel_msg(message: discord.Message) -> tuple[bool, Optional[str]]:
+    return get_permission_checker().in_allowed_location_msg(message)
 
 
 def check_cooldown(user_id: str, cooldown_seconds: Optional[int] = None) -> tuple[bool, Optional[str]]:

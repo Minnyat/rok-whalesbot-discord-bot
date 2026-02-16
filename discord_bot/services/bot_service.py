@@ -66,32 +66,103 @@ class BotService:
             # Return False on error to be safe - we don't want to start a bot that might already be running
             return False
     
-    async def start_instance(self, user_id: str) -> Dict[str, Any]:
+    def _is_admin(self, user_id: str) -> bool:
+        """Check if a user ID is an admin."""
+        config = self.data_manager.get_config()
+        return user_id in config.admin_users
+
+    def _resolve_emulator_index(self, user, emulator_name: str, is_admin: bool = False) -> Dict[str, Any]:
+        """
+        Resolve an emulator name to an index, verifying the user is linked to it.
+
+        Args:
+            user: User object
+            emulator_name: Name of the emulator to resolve
+            is_admin: If True, skip ownership check (admins can control any emulator)
+
+        Returns:
+            Dict with 'success', 'index', and optionally 'message'
+        """
+        try:
+            # Check user's own emulators list first
+            emu_entry = user.get_emulator_by_name(emulator_name)
+            if emu_entry:
+                return {
+                    'success': True,
+                    'index': emu_entry['index']
+                }
+
+            # Not in user's list — check if the emulator exists
+            emulator_state = self.whalesbot.get_emulator_state_by_name(emulator_name)
+            if not emulator_state:
+                return {
+                    'success': False,
+                    'message': f'Emulator "{emulator_name}" not found.'
+                }
+
+            # Admins can control any emulator
+            if is_admin:
+                return {
+                    'success': True,
+                    'index': emulator_state.index
+                }
+
+            return {
+                'success': False,
+                'message': f'You are not linked to emulator "{emulator_name}". Use `link {emulator_name}` first.'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'message': f'Error resolving emulator: {str(e)}'
+            }
+
+    async def start_instance(self, user_id: str, emulator_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Start bot instance for user.
 
         Args:
             user_id: Discord user ID
+            emulator_name: Optional emulator name to start (uses user's linked emulator if None)
 
         Returns:
             Result dictionary with success status and message
         """
+        is_admin = self._is_admin(user_id)
+
         user = self.data_manager.get_user(user_id)
-        if not user:
+        if not user and not is_admin:
             return {
                 'success': False,
                 'message': "You don't have access. Please contact admin."
             }
 
-        # Check if user is linked to an emulator (by index)
-        if user.emulator_index == -1:
-            return {
-                'success': False,
-                'message': 'You are not linked to any emulator. Please use /link <emulator_name> to link first.\nUse /list_emulators to see available emulators.'
-            }
+        # Resolve emulator index
+        if emulator_name:
+            if not user:
+                # Admin without a user record — resolve directly
+                try:
+                    emulator_state = self.whalesbot.get_emulator_state_by_name(emulator_name)
+                    if not emulator_state:
+                        return {'success': False, 'message': f'Emulator "{emulator_name}" not found.'}
+                    emulator_index = emulator_state.index
+                except Exception as e:
+                    return {'success': False, 'message': f'Error resolving emulator: {str(e)}'}
+            else:
+                resolve_result = self._resolve_emulator_index(user, emulator_name, is_admin=is_admin)
+                if not resolve_result['success']:
+                    return resolve_result
+                emulator_index = resolve_result['index']
+        else:
+            if not user or user.emulator_index == -1:
+                return {
+                    'success': False,
+                    'message': 'You are not linked to any emulator. Use `link <emulator_name>` to link first.'
+                }
+            emulator_index = user.emulator_index
 
         # Attempt to backfill emulator name if missing (non-blocking)
-        if not user.emulator_name:
+        if user and not user.emulator_name:
             try:
                 for state in self.whalesbot.get_emulator_states():
                     if state.index == user.emulator_index:
@@ -99,11 +170,10 @@ class BotService:
                         self.data_manager.save_user(user)
                         break
             except Exception:
-                # Ignore errors here; starting by index may still work
                 pass
 
-        # Check subscription
-        if user.subscription.is_expired:
+        # Check subscription (admins bypass)
+        if not is_admin and user and user.subscription.is_expired:
             return {
                 'success': False,
                 'message': f'Your subscription expired on {user.subscription.end_at}. Please renew.'
@@ -111,224 +181,277 @@ class BotService:
 
         # If queue is available, use queued execution
         if self.use_queue and self.operation_queue:
-            return await self._queued_start_instance(user)
+            return await self._queued_start_instance(user, emulator_index)
+
+        emu_label = emulator_name or (user.emulator_name if user else None) or f"#{emulator_index}"
 
         try:
             actual_emulator_state = await asyncio.wait_for(
-                asyncio.to_thread(self._get_actual_emulator_state, user.emulator_index),
+                asyncio.to_thread(self._get_actual_emulator_state, emulator_index),
                 timeout=10.0
             )
 
-            if user.is_running and not actual_emulator_state:
-                print(f"[SYNC] User {user.discord_name} database says RUNNING but emulator is STOPPED. Syncing state...")
-                user.status = InstanceStatus.STOPPED.value
-                user.last_stop = datetime.now(pytz.UTC).isoformat()
-                self.data_manager.save_user(user)
-                return {
-                    'success': False,
-                    'message': 'Detected state inconsistency. Your miner was stopped outside Discord. Status has been synchronized. Please try starting again.'
-                }
+            if user:
+                if user.is_running and not actual_emulator_state:
+                    print(f"[SYNC] User {user.discord_name} database says RUNNING but emulator is STOPPED. Syncing state...")
+                    user.status = InstanceStatus.STOPPED.value
+                    user.last_stop = datetime.now(pytz.UTC).isoformat()
+                    self.data_manager.save_user(user)
+                    return {
+                        'success': False,
+                        'message': 'Detected state inconsistency. Your miner was stopped outside Discord. Status has been synchronized. Please try starting again.'
+                    }
 
-            if user.is_running and actual_emulator_state:
-                return {
-                    'success': False,
-                    'message': 'Your miner is already running.'
-                }
+                if user.is_running and actual_emulator_state:
+                    return {
+                        'success': False,
+                        'message': 'Your miner is already running.'
+                    }
 
-            if not user.is_running and actual_emulator_state:
-                print(f"[SYNC] User {user.discord_name} database says STOPPED but emulator is RUNNING. Syncing state...")
-                user.status = InstanceStatus.RUNNING.value
-                user.last_start = datetime.now(pytz.UTC).isoformat()
-                user.last_heartbeat = datetime.now(pytz.UTC).isoformat()
-                self.data_manager.save_user(user)
-                return {
-                    'success': False,
-                    'message': 'Detected state inconsistency. Your miner was started outside Discord. Status has been synchronized. Use /status to check current state.'
-                }
+                if not user.is_running and actual_emulator_state:
+                    print(f"[SYNC] User {user.discord_name} database says STOPPED but emulator is RUNNING. Syncing state...")
+                    user.status = InstanceStatus.RUNNING.value
+                    user.last_start = datetime.now(pytz.UTC).isoformat()
+                    user.last_heartbeat = datetime.now(pytz.UTC).isoformat()
+                    self.data_manager.save_user(user)
+                    return {
+                        'success': False,
+                        'message': 'Detected state inconsistency. Your miner was started outside Discord. Status has been synchronized.'
+                    }
+            else:
+                # Admin with no user record — just check actual state
+                if actual_emulator_state:
+                    return {
+                        'success': False,
+                        'message': 'Emulator is already running.'
+                    }
         except asyncio.TimeoutError:
-            print(f"[ERROR] Timeout checking emulator state for user {user.discord_name}")
+            user_label = user.discord_name if user else user_id
+            print(f"[ERROR] Timeout checking emulator state for user {user_label}")
             return {
                 'success': False,
                 'message': 'Timeout checking emulator state. WhaleBots may not be responding. Please try again.'
             }
         except Exception as e:
-            print(f"[ERROR] Failed to check emulator state for user {user.discord_name}: {e}")
+            user_label = user.discord_name if user else user_id
+            print(f"[ERROR] Failed to check emulator state for user {user_label}: {e}")
             return {
                 'success': False,
                 'message': f'Unable to verify emulator state. Please try again. Error: {str(e)}'
             }
-        
+
         try:
             await asyncio.wait_for(
-                asyncio.to_thread(self.whalesbot.start, user.emulator_index),
+                asyncio.to_thread(self.whalesbot.start, emulator_index),
                 timeout=30.0
             )
-            
-            user.status = InstanceStatus.RUNNING.value
-            user.last_start = datetime.now(pytz.UTC).isoformat()
-            user.last_heartbeat = datetime.now(pytz.UTC).isoformat()
-            self.data_manager.save_user(user)
-            
+
+            if user:
+                user.status = InstanceStatus.RUNNING.value
+                user.last_start = datetime.now(pytz.UTC).isoformat()
+                user.last_heartbeat = datetime.now(pytz.UTC).isoformat()
+                self.data_manager.save_user(user)
+
             return {
                 'success': True,
-                'message': 'Miner started succesfully!\nPls wait 45 seconds for the Miner to run.\nDo not send any more orders for about 2 minutes.\nTime left: ...'
+                'message': f'Bot started for {emu_label}'
             }
-        
+
         except asyncio.TimeoutError:
-            print(f"[ERROR] Timeout starting emulator for user {user.discord_name}")
-            user.status = InstanceStatus.ERROR.value
-            self.data_manager.save_user(user)
+            user_label = user.discord_name if user else user_id
+            print(f"[ERROR] Timeout starting emulator for user {user_label}")
+            if user:
+                user.status = InstanceStatus.ERROR.value
+                self.data_manager.save_user(user)
             return {
                 'success': False,
                 'message': 'Timeout starting miner. WhaleBots window may not be responding. Please check manually.'
             }
-            
+
         except EmulatorAlreadyRunningError:
-            # Update status to running anyway
-            user.status = InstanceStatus.RUNNING.value
-            self.data_manager.save_user(user)
+            if user:
+                user.status = InstanceStatus.RUNNING.value
+                self.data_manager.save_user(user)
             return {
                 'success': False,
                 'message': 'Emulator is already running.'
             }
-            
+
         except (EmulatorNotFoundError, WindowError) as e:
-            user.status = InstanceStatus.ERROR.value
-            self.data_manager.save_user(user)
+            if user:
+                user.status = InstanceStatus.ERROR.value
+                self.data_manager.save_user(user)
             return {
                 'success': False,
                 'message': f'Error starting: {str(e)}'
             }
-            
+
         except Exception as e:
-            user.status = InstanceStatus.ERROR.value
-            self.data_manager.save_user(user)
+            if user:
+                user.status = InstanceStatus.ERROR.value
+                self.data_manager.save_user(user)
             return {
                 'success': False,
                 'message': f'Unknown error: {str(e)}'
             }
     
-    async def stop_instance(self, user_id: str) -> Dict[str, Any]:
+    async def stop_instance(self, user_id: str, emulator_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Stop bot instance for user.
 
         Args:
             user_id: Discord user ID
+            emulator_name: Optional emulator name to stop (uses user's linked emulator if None)
 
         Returns:
             Result dictionary with success status and message
         """
+        is_admin = self._is_admin(user_id)
+
         user = self.data_manager.get_user(user_id)
-        if not user:
+        if not user and not is_admin:
             return {
                 'success': False,
                 'message': "You don't have access."
             }
 
+        # Resolve emulator index
+        if emulator_name:
+            if not user:
+                # Admin without a user record — resolve directly
+                try:
+                    emulator_state = self.whalesbot.get_emulator_state_by_name(emulator_name)
+                    if not emulator_state:
+                        return {'success': False, 'message': f'Emulator "{emulator_name}" not found.'}
+                    emulator_index = emulator_state.index
+                except Exception as e:
+                    return {'success': False, 'message': f'Error resolving emulator: {str(e)}'}
+            else:
+                resolve_result = self._resolve_emulator_index(user, emulator_name, is_admin=is_admin)
+                if not resolve_result['success']:
+                    return resolve_result
+                emulator_index = resolve_result['index']
+        else:
+            if not user or user.emulator_index == -1:
+                return {
+                    'success': False,
+                    'message': 'No emulator specified. Use `stop <emulator_name>`.'
+                }
+            emulator_index = user.emulator_index
+
         # If queue is available, use queued execution
         if self.use_queue and self.operation_queue:
-            return await self._queued_stop_instance(user)
+            return await self._queued_stop_instance(user, emulator_index)
+
+        emu_label = emulator_name or (user.emulator_name if user else None) or f"#{emulator_index}"
 
         # Check actual emulator state before proceeding (run in thread to avoid blocking)
         try:
             actual_emulator_state = await asyncio.wait_for(
-                asyncio.to_thread(self._get_actual_emulator_state, user.emulator_index),
+                asyncio.to_thread(self._get_actual_emulator_state, emulator_index),
                 timeout=10.0
             )
 
-            # Check if database says running but emulator is actually stopped (GUI stop scenario)
-            if user.is_running and not actual_emulator_state:
-                print(f"[SYNC] User {user.discord_name} database says RUNNING but emulator is STOPPED during stop command. Syncing state...")
-                user.status = InstanceStatus.STOPPED.value
-                user.last_stop = datetime.now(pytz.UTC).isoformat()
-                self.data_manager.save_user(user)
-                return {
-                    'success': False,
-                    'message': 'Your miner is already stopped (state synchronized). No action needed.'
-                }
+            if user:
+                # Check if database says running but emulator is actually stopped (GUI stop scenario)
+                if user.is_running and not actual_emulator_state:
+                    print(f"[SYNC] User {user.discord_name} database says RUNNING but emulator is STOPPED during stop command. Syncing state...")
+                    user.status = InstanceStatus.STOPPED.value
+                    user.last_stop = datetime.now(pytz.UTC).isoformat()
+                    self.data_manager.save_user(user)
+                    return {
+                        'success': False,
+                        'message': 'Your miner is already stopped (state synchronized). No action needed.'
+                    }
 
-            # Check if database says stopped but emulator is actually running (GUI start scenario)
-            if not user.is_running and actual_emulator_state:
-                print(f"[SYNC] User {user.discord_name} database says STOPPED but emulator is RUNNING during stop command. Syncing state...")
-                user.status = InstanceStatus.RUNNING.value
-                user.last_start = datetime.now(pytz.UTC).isoformat()
-                user.last_heartbeat = datetime.now(pytz.UTC).isoformat()
-                self.data_manager.save_user(user)
-                # Now proceed with actual stop
-                # Fall through to the stop logic below after sync
+                # Check if database says stopped but emulator is actually running (GUI start scenario)
+                if not user.is_running and actual_emulator_state:
+                    print(f"[SYNC] User {user.discord_name} database says STOPPED but emulator is RUNNING during stop command. Syncing state...")
+                    user.status = InstanceStatus.RUNNING.value
+                    user.last_start = datetime.now(pytz.UTC).isoformat()
+                    user.last_heartbeat = datetime.now(pytz.UTC).isoformat()
+                    self.data_manager.save_user(user)
+                    # Fall through to the stop logic below after sync
 
-            # Check if not running (both database and actual state agree after potential sync)
-            if not user.is_running and not actual_emulator_state:
-                return {
-                    'success': False,
-                    'message': 'Your miner is not running.'
-                }
+                # Check if not running (both database and actual state agree after potential sync)
+                if not user.is_running and not actual_emulator_state:
+                    return {
+                        'success': False,
+                        'message': 'Your miner is not running.'
+                    }
+            else:
+                # Admin with no user record — just check actual state
+                if not actual_emulator_state:
+                    return {
+                        'success': False,
+                        'message': 'Emulator is not running.'
+                    }
         except asyncio.TimeoutError:
-            print(f"[ERROR] Timeout checking emulator state for user {user.discord_name}")
+            user_label = user.discord_name if user else user_id
+            print(f"[ERROR] Timeout checking emulator state for user {user_label}")
             return {
                 'success': False,
                 'message': 'Timeout checking emulator state. WhaleBots may not be responding. Please try again.'
             }
         except Exception as e:
-            print(f"[ERROR] Failed to check emulator state for user {user.discord_name} during stop: {e}")
-            # Continue with stop attempt but warn about potential issues
+            user_label = user.discord_name if user else user_id
+            print(f"[ERROR] Failed to check emulator state for user {user_label} during stop: {e}")
             return {
                 'success': False,
                 'message': f'Unable to verify emulator state. Please try again. Error: {str(e)}'
             }
-        
+
         # Try to stop (run in thread to avoid blocking Discord event loop)
         try:
             await asyncio.wait_for(
-                asyncio.to_thread(self.whalesbot.stop, user.emulator_index),
+                asyncio.to_thread(self.whalesbot.stop, emulator_index),
                 timeout=30.0
             )
-            
-            # Update user status
-            user.status = InstanceStatus.STOPPED.value
-            user.last_stop = datetime.now(pytz.UTC).isoformat()
-            self.data_manager.save_user(user)
-            
-            uptime_text = ""
-            if user.uptime_seconds:
-                hours = user.uptime_seconds // 3600
-                minutes = (user.uptime_seconds % 3600) // 60
-                uptime_text = f"\nUptime: {hours}h {minutes}m"
-            
+
+            # Update user status if user record exists
+            if user:
+                user.status = InstanceStatus.STOPPED.value
+                user.last_stop = datetime.now(pytz.UTC).isoformat()
+                self.data_manager.save_user(user)
+
             return {
                 'success': True,
-                'message': 'Miner is sending stop command, please wait 1 minute then login, thank you!'
+                'message': f'Bot stopped for {emu_label}'
             }
-        
+
         except asyncio.TimeoutError:
-            print(f"[ERROR] Timeout stopping emulator for user {user.discord_name}")
-            user.status = InstanceStatus.ERROR.value
-            self.data_manager.save_user(user)
+            user_label = user.discord_name if user else user_id
+            print(f"[ERROR] Timeout stopping emulator for user {user_label}")
+            if user:
+                user.status = InstanceStatus.ERROR.value
+                self.data_manager.save_user(user)
             return {
                 'success': False,
                 'message': 'Timeout stopping miner. WhaleBots window may not be responding. Please check manually.'
             }
-            
+
         except EmulatorNotRunningError:
-            # Update status to stopped anyway
-            user.status = InstanceStatus.STOPPED.value
-            self.data_manager.save_user(user)
+            if user:
+                user.status = InstanceStatus.STOPPED.value
+                self.data_manager.save_user(user)
             return {
                 'success': False,
                 'message': 'Emulator is not running.'
             }
-            
+
         except (EmulatorNotFoundError, WindowError) as e:
-            user.status = InstanceStatus.ERROR.value
-            self.data_manager.save_user(user)
+            if user:
+                user.status = InstanceStatus.ERROR.value
+                self.data_manager.save_user(user)
             return {
                 'success': False,
                 'message': f'Error stopping: {str(e)}'
             }
-            
+
         except Exception as e:
-            user.status = InstanceStatus.ERROR.value
-            self.data_manager.save_user(user)
+            if user:
+                user.status = InstanceStatus.ERROR.value
+                self.data_manager.save_user(user)
             return {
                 'success': False,
                 'message': f'Unknown error: {str(e)}'
@@ -682,16 +805,19 @@ class BotService:
             self._whalesbot.cleanup()
             self._whalesbot = None
 
-    async def _queued_start_instance(self, user: User) -> Dict[str, Any]:
+    async def _queued_start_instance(self, user: User, emulator_index: int = None) -> Dict[str, Any]:
         """
         Start instance using queue system.
 
         Args:
             user: User object
+            emulator_index: Emulator index to start (defaults to user.emulator_index)
 
         Returns:
             Result dictionary with success status and message
         """
+        if emulator_index is None:
+            emulator_index = user.emulator_index
         # Check if user already has pending operations
         pending_ops = self.operation_queue.get_pending_operations()
         user_pending = [op for op in pending_ops if op['user_name'] == user.discord_name]
@@ -702,10 +828,12 @@ class BotService:
                 'message': f'You already have a pending operation in the queue (position #{user_pending[0]["queue_position"]}).'
             }
 
+        emu_label = (user.emulator_name if user else None) or f"#{emulator_index}"
+
         # Create start operation callback
         async def start_operation():
             # Check actual emulator state before proceeding
-            actual_emulator_state = self._get_actual_emulator_state(user.emulator_index)
+            actual_emulator_state = self._get_actual_emulator_state(emulator_index)
 
             # Check for state inconsistency
             if user.is_running and not actual_emulator_state:
@@ -739,7 +867,7 @@ class BotService:
 
             # Execute start operation
             try:
-                self.whalesbot.start(user.emulator_index)
+                self.whalesbot.start(emulator_index)
 
                 # Update user status
                 user.status = InstanceStatus.RUNNING.value
@@ -749,7 +877,7 @@ class BotService:
 
                 return {
                     'success': True,
-                    'message': 'Miner started succesfully!\nPls wait 45 seconds for the Miner to run.\nDo not send any more orders for about 2 minutes.\nTime left: ...'
+                    'message': f'Bot started for {emu_label}'
                 }
 
             except EmulatorAlreadyRunningError:
@@ -774,7 +902,7 @@ class BotService:
             operation_type=OperationType.START,
             user_id=user.discord_id,
             user_name=user.discord_name,
-            emulator_index=user.emulator_index,
+            emulator_index=emulator_index,
             priority=Priority.NORMAL,
             timeout=60,
             callback=start_operation,
@@ -798,16 +926,19 @@ class BotService:
                 'message': f'Operation failed: {result.error or "Unknown error"}'
             }
 
-    async def _queued_stop_instance(self, user: User) -> Dict[str, Any]:
+    async def _queued_stop_instance(self, user: User, emulator_index: int = None) -> Dict[str, Any]:
         """
         Stop instance using queue system.
 
         Args:
             user: User object
+            emulator_index: Emulator index to stop (defaults to user.emulator_index)
 
         Returns:
             Result dictionary with success status and message
         """
+        if emulator_index is None:
+            emulator_index = user.emulator_index
         # Check if user already has pending operations
         pending_ops = self.operation_queue.get_pending_operations()
         user_pending = [op for op in pending_ops if op['user_name'] == user.discord_name]
@@ -818,10 +949,12 @@ class BotService:
                 'message': f'You already have a pending operation in the queue (position #{user_pending[0]["queue_position"]}).'
             }
 
+        emu_label = (user.emulator_name if user else None) or f"#{emulator_index}"
+
         # Create stop operation callback
         async def stop_operation():
             # Check actual emulator state before proceeding
-            actual_emulator_state = self._get_actual_emulator_state(user.emulator_index)
+            actual_emulator_state = self._get_actual_emulator_state(emulator_index)
 
             # Check for state inconsistency
             if user.is_running and not actual_emulator_state:
@@ -851,7 +984,7 @@ class BotService:
 
             # Execute stop operation
             try:
-                self.whalesbot.stop(user.emulator_index)
+                self.whalesbot.stop(emulator_index)
 
                 # Update user status
                 user.status = InstanceStatus.STOPPED.value
@@ -866,7 +999,7 @@ class BotService:
 
                 return {
                     'success': True,
-                    'message': 'Miner is sending stop command, please wait 1 minute then login, thank you!'
+                    'message': f'Bot stopped for {emu_label}'
                 }
 
             except EmulatorNotRunningError:
@@ -891,7 +1024,7 @@ class BotService:
             operation_type=OperationType.STOP,
             user_id=user.discord_id,
             user_name=user.discord_name,
-            emulator_index=user.emulator_index,
+            emulator_index=emulator_index,
             priority=Priority.HIGH,  # Stop operations have higher priority
             timeout=45,
             callback=stop_operation,
