@@ -221,7 +221,7 @@ class DataManager:
         """
         all_users = self.get_all_users()
         for user in all_users:
-            if user.emulator_index == emulator_index:
+            if user.has_emulator_index(emulator_index):
                 return user
         return None
     

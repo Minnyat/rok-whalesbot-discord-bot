@@ -283,9 +283,10 @@ function renderUsers(users) {
         
             // Emulator info
         let emulatorInfo = '<span class="badge bg-secondary">Unlinked</span>';
-        if (user.emulator_index !== -1) {
-            const emulatorName = user.emulator_name || `Emulator ${user.emulator_index}`;
-            emulatorInfo = `<span class="badge bg-info">#${user.emulator_index}</span> ${escapeHtml(emulatorName)}`;
+        if (user.emulators && user.emulators.length > 0) {
+            emulatorInfo = user.emulators.map(e =>
+                `<span class="badge bg-info">#${e.index}</span> ${escapeHtml(e.name)}`
+            ).join('<br>');
         }
 
         row.innerHTML = `
@@ -315,7 +316,7 @@ function renderUsers(users) {
                                     <i class="bi bi-play-fill"></i> Start
                                </button>`
                         }
-                        ${user.emulator_index !== -1 ? `
+                        ${user.emulators && user.emulators.length > 0 ? `
                             <button class="btn btn-warning btn-sm" onclick="unlinkUser('${user.discord_id}', '${escapeHtml(user.discord_name)}')" title="Unlink from Emulator">
                                 <i class="bi bi-link-45deg"></i> Unlink
                             </button>
@@ -484,7 +485,7 @@ async function deleteUser(userId, userName) {
 }
 
 async function bulkUnlinkExpired() {
-    const expiredCount = usersData.filter(u => u.subscription.is_expired && u.emulator_index !== -1).length;
+    const expiredCount = usersData.filter(u => u.subscription.is_expired && u.emulators && u.emulators.length > 0).length;
     if (expiredCount === 0) {
         showToast('No expired users with emulators found', 'info');
         return;

@@ -21,6 +21,7 @@ def get_instances():
             'discord_id': user.discord_id,
             'discord_name': user.discord_name,
             'emulator_index': user.emulator_index,
+            'emulators': user.emulators,
             'status': user.status,
             'last_start': user.last_start,
             'last_heartbeat': user.last_heartbeat,

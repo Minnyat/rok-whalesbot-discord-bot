@@ -90,9 +90,8 @@ class SubscriptionService:
             new_user = User(
                 discord_id=discord_id,
                 discord_name=discord_name,
-                emulator_index=-1,  # -1 means not linked yet
-                emulator_name=None,
                 subscription=subscription,
+                emulators=[],
                 status=InstanceStatus.STOPPED.value
             )
 

@@ -276,7 +276,7 @@ def bulk_unlink_expired():
 
     # Get all expired users with emulators
     all_users = data_manager.get_all_users()
-    expired_users = [u for u in all_users if u.subscription.is_expired and u.emulator_index != -1]
+    expired_users = [u for u in all_users if u.subscription.is_expired and u.is_linked]
 
     if not expired_users:
         return jsonify({

@@ -63,44 +63,79 @@ class User:
     """User information and bot instance mapping."""
     discord_id: str
     discord_name: str
-    emulator_index: int
     subscription: Subscription
-    emulator_name: Optional[str] = None  # Emulator name (set via /link)
+    emulators: List[Dict[str, Any]] = field(default_factory=list)  # [{"index": int, "name": str}, ...]
     status: str = InstanceStatus.STOPPED.value
     last_heartbeat: Optional[str] = None  # ISO format datetime
     created_at: str = field(default_factory=lambda: datetime.now(pytz.UTC).isoformat())
     last_start: Optional[str] = None  # ISO format datetime for cooldown
     last_stop: Optional[str] = None   # ISO format datetime
-    
+
+    @property
+    def is_linked(self) -> bool:
+        """Check if user is linked to at least one emulator."""
+        return len(self.emulators) > 0
+
+    @property
+    def emulator_indices(self) -> List[int]:
+        """Get all linked emulator indices."""
+        return [e['index'] for e in self.emulators]
+
+    @property
+    def emulator_names(self) -> List[str]:
+        """Get all linked emulator names."""
+        return [e['name'] for e in self.emulators]
+
+    def has_emulator_index(self, index: int) -> bool:
+        """Check if user owns this emulator index."""
+        return index in self.emulator_indices
+
+    def get_emulator_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """Find emulator entry by name (case-insensitive)."""
+        for e in self.emulators:
+            if e['name'].lower() == name.lower():
+                return e
+        return None
+
+    @property
+    def emulator_index(self) -> int:
+        """Backward compat: return first emulator index or -1."""
+        return self.emulators[0]['index'] if self.emulators else -1
+
+    @property
+    def emulator_name(self) -> Optional[str]:
+        """Backward compat: return first emulator name or None."""
+        return self.emulators[0]['name'] if self.emulators else None
+
     @property
     def last_heartbeat_datetime(self) -> Optional[datetime]:
         """Get last heartbeat as datetime."""
         if self.last_heartbeat:
             return datetime.fromisoformat(self.last_heartbeat)
         return None
-    
+
     @property
     def created_datetime(self) -> datetime:
         """Get created_at as datetime."""
         return datetime.fromisoformat(self.created_at)
-    
+
     @property
     def last_start_datetime(self) -> Optional[datetime]:
         """Get last_start as datetime."""
         if self.last_start:
             return datetime.fromisoformat(self.last_start)
         return None
-    
+
     @property
     def is_running(self) -> bool:
         """Check if instance is currently running."""
         return self.status == InstanceStatus.RUNNING.value
-    
+
     @property
     def is_expired(self) -> bool:
         """Check if user subscription is expired."""
         return self.subscription.is_expired
-    
+
     @property
     def uptime_seconds(self) -> Optional[int]:
         """Calculate uptime in seconds if running."""
@@ -111,12 +146,13 @@ class User:
                 start = pytz.UTC.localize(start)
             return int((now - start).total_seconds())
         return None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
             'discord_id': self.discord_id,
             'discord_name': self.discord_name,
+            'emulators': self.emulators,
             'emulator_index': self.emulator_index,
             'emulator_name': self.emulator_name,
             'subscription': self.subscription.to_dict(),
@@ -128,7 +164,7 @@ class User:
             'is_running': self.is_running,
             'uptime_seconds': self.uptime_seconds
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'User':
         """Create User from dictionary."""
@@ -137,13 +173,23 @@ class User:
             start_at=subscription_data.get('start_at', ''),
             end_at=subscription_data.get('end_at', '')
         )
-        
+
+        # Migration: old format has emulator_index + emulator_name, new has emulators list
+        if 'emulators' in data:
+            emulators = data['emulators']
+        else:
+            old_index = data.get('emulator_index', -1)
+            old_name = data.get('emulator_name')
+            if old_index != -1:
+                emulators = [{'index': old_index, 'name': old_name or f'Emulator_{old_index}'}]
+            else:
+                emulators = []
+
         return cls(
             discord_id=data['discord_id'],
             discord_name=data['discord_name'],
-            emulator_index=data['emulator_index'],
             subscription=subscription,
-            emulator_name=data.get('emulator_name'),
+            emulators=emulators,
             status=data.get('status', InstanceStatus.STOPPED.value),
             last_heartbeat=data.get('last_heartbeat'),
             created_at=data.get('created_at', datetime.now(pytz.UTC).isoformat()),

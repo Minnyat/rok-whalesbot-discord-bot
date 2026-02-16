@@ -112,7 +112,7 @@ async function loadOverviewData() {
                 row.innerHTML = `
                     <td>${escapeHtml(instance.discord_name)}</td>
                     <td><code>${instance.discord_id}</code></td>
-                    <td><span class="badge bg-secondary">#${instance.emulator_index}</span></td>
+                    <td>${(instance.emulators || []).map(e => `<span class="badge bg-secondary me-1">#${e.index} ${e.name}</span>`).join(' ')}</td>
                     <td>${uptimeText}</td>
                     <td>${heartbeatText}</td>
                     <td>

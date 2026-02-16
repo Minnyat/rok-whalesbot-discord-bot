@@ -643,12 +643,14 @@ class QueuedBotService:
                     'linked_user': None  # Will be filled later
                 })
 
-            # Find linked users
+            # Find linked users (multiple users can share an emulator)
             all_users = self.data_manager.get_all_users()
-            for user in all_users:
-                for emu in emulators:
+            for emu in emulators:
+                linked_users = []
+                for user in all_users:
                     if user.emulator_index == emu['index']:
-                        emu['linked_user'] = user.discord_name
+                        linked_users.append(user.discord_name)
+                emu['linked_user'] = ", ".join(linked_users) if linked_users else None
 
             return {
                 'success': True,

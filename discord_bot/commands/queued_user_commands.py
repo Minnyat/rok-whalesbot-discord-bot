@@ -36,7 +36,10 @@ def setup_queued_user_commands(
         name="start",
         description="Start your bot instance (queued)"
     )
-    async def start(ctx: discord.ApplicationContext):
+    async def start(
+        ctx: discord.ApplicationContext,
+        emulator_name: Option(str, "Emulator name (leave empty for all)", required=False, default=None)
+    ):
         """Start user's bot instance with queue support."""
         # Check if in allowed location
         allowed, error_msg = in_allowed_channel(ctx)
@@ -75,7 +78,7 @@ def setup_queued_user_commands(
         )
 
         # Start instance through queue
-        result = await bot_service.start_instance(user_id)
+        result = await bot_service.start_instance(user_id, emulator_name=emulator_name)
 
         # Log action
         data_manager.log_action(
@@ -93,7 +96,10 @@ def setup_queued_user_commands(
         name="stop",
         description="Stop your bot instance (queued)"
     )
-    async def stop(ctx: discord.ApplicationContext):
+    async def stop(
+        ctx: discord.ApplicationContext,
+        emulator_name: Option(str, "Emulator name (leave empty for all)", required=False, default=None)
+    ):
         """Stop user's bot instance with queue support."""
         # Check if in allowed location
         allowed, error_msg = in_allowed_channel(ctx)
@@ -132,7 +138,7 @@ def setup_queued_user_commands(
         )
 
         # Stop instance through queue
-        result = await bot_service.stop_instance(user_id)
+        result = await bot_service.stop_instance(user_id, emulator_name=emulator_name)
 
         # Log action
         data_manager.log_action(
@@ -178,11 +184,23 @@ def setup_queued_user_commands(
             inline=True
         )
 
-        embed.add_field(
-            name="Emulator",
-            value=f"#{status_info['emulator_index']}",
-            inline=True
-        )
+        # Show per-emulator status
+        emulator_statuses = status_info.get('emulators', [])
+        if emulator_statuses:
+            for emu_status in emulator_statuses:
+                indicator = "\U0001f7e2" if emu_status['is_running'] else "\U0001f534"
+                state_text = "Running" if emu_status['is_running'] else "Stopped"
+                embed.add_field(
+                    name=f"{indicator} {emu_status['name']}",
+                    value=f"Index: #{emu_status['index']}\nState: {state_text}",
+                    inline=True
+                )
+        else:
+            embed.add_field(
+                name="Emulator",
+                value="Not linked",
+                inline=True
+            )
 
         if status_info['is_running'] and status_info['uptime_seconds']:
             hours = status_info['uptime_seconds'] // 3600
@@ -321,7 +339,7 @@ def setup_queued_user_commands(
 
     @bot.slash_command(
         name="link",
-        description="Link your account to an emulator"
+        description="Link your account to an additional emulator"
     )
     async def link(
         ctx: discord.ApplicationContext,
@@ -460,8 +478,10 @@ def setup_queued_user_commands(
         embed.add_field(
             name="Miner Control",
             value=(
-                "`/start` - Start your miner (queued)\n"
-                "`/stop` - Stop your miner (queued)\n"
+                "`/start` - Start all your emulators (queued)\n"
+                "`/start <emulator_name>` - Start a specific emulator\n"
+                "`/stop` - Stop all your emulators (queued)\n"
+                "`/stop <emulator_name>` - Stop a specific emulator\n"
                 "`/status` - Check miner status and queue position\n"
                 "`/expiry` - View subscription info"
             ),

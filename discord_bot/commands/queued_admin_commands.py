@@ -403,9 +403,10 @@ def setup_queued_admin_commands(
     )
     async def unlink_user(
         ctx: discord.ApplicationContext,
-        user: Option(discord.User, "User to unlink", required=True)
+        user: Option(discord.User, "User to unlink", required=True),
+        emulator_name: Option(str, "Specific emulator to unlink (leave empty for all)", required=False, default=None)
     ):
-        """Unlink a user from their emulator."""
+        """Unlink a user from their emulator(s)."""
         # Check admin permissions
         if not is_admin(ctx):
             await ctx.respond("❌ Admin command only.", ephemeral=True)
@@ -432,14 +433,15 @@ def setup_queued_admin_commands(
             return
 
         # Unlink user
-        result = bot_service.unlink_user_from_emulator(str(user.id))
+        result = bot_service.unlink_user_from_emulator(str(user.id), emulator_name=emulator_name)
 
         # Log action
+        detail_text = f"Unlinked {user.name} from {emulator_name}" if emulator_name else f"Unlinked {user.name} from all emulators"
         data_manager.log_action(
             user_id=str(ctx.author.id),
             user_name=str(ctx.author),
             action=ActionType.CONFIG_CHANGE,
-            details=f"Unlinked {user.name} from emulator",
+            details=detail_text,
             result=ActionResult.SUCCESS if result['success'] else ActionResult.FAILED
         )
 

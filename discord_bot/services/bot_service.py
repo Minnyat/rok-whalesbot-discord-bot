@@ -477,12 +477,14 @@ class BotService:
                     'linked_user': None  # Will be filled later
                 })
             
-            # Find linked users
+            # Find linked users (multiple users can share an emulator)
             all_users = self.data_manager.get_all_users()
-            for user in all_users:
-                for emu in emulators:
+            for emu in emulators:
+                linked_users = []
+                for user in all_users:
                     if user.emulator_index == emu['index']:
-                        emu['linked_user'] = user.discord_name
+                        linked_users.append(user.discord_name)
+                emu['linked_user'] = ", ".join(linked_users) if linked_users else None
             
             return {
                 'success': True,
@@ -503,13 +505,13 @@ class BotService:
     ) -> Dict[str, Any]:
         """
         Link user to an emulator by name.
-        Each emulator can only be linked to ONE user.
-        
+        Multiple users can share the same emulator.
+
         Args:
             user_id: Discord user ID
             emulator_name: Name of the emulator to link
             discord_name: Discord username (used when auto-creating a user record)
-            
+
         Returns:
             Result dictionary
         """
@@ -529,14 +531,14 @@ class BotService:
                 status=InstanceStatus.STOPPED.value
             )
             self.data_manager.save_user(user)
-        
+
         # Check if user's bot is running
         if user.is_running:
             return {
                 'success': False,
                 'message': 'Please stop your miner before changing emulator link.'
             }
-        
+
         # Find emulator by name
         try:
             emulator_state = self.whalesbot.get_emulator_state_by_name(emulator_name)
@@ -545,27 +547,18 @@ class BotService:
                     'success': False,
                     'message': f'Emulator "{emulator_name}" not found.'
                 }
-            
-            # Check if emulator is already linked to another user
-            all_users = self.data_manager.get_all_users()
-            for other_user in all_users:
-                if other_user.discord_id != user_id and other_user.emulator_index == emulator_state.index:
-                    return {
-                        'success': False,
-                        'message': f'Emulator "{emulator_name}" is already linked to {other_user.discord_name}. Each emulator can only be linked to one user.'
-                    }
-            
+
             # Link emulator
             old_emulator = user.emulator_name or f"Unlinked (Index {user.emulator_index})"
             user.emulator_index = emulator_state.index
             user.emulator_name = emulator_state.emulator_info.name
             self.data_manager.save_user(user)
-            
+
             return {
                 'success': True,
                 'message': f'Successfully linked to emulator "{emulator_name}"!\nOld: {old_emulator}\nNew: {user.emulator_name} (Index {user.emulator_index})'
             }
-            
+
         except Exception as e:
             return {
                 'success': False,
