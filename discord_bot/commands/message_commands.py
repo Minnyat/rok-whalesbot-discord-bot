@@ -7,7 +7,7 @@ from datetime import datetime
 
 import discord
 
-from discord_bot.utils.permissions import in_allowed_channel_msg, check_cooldown
+from discord_bot.utils.permissions import in_allowed_channel_msg
 from discord_bot.services.bot_service import BotService
 from discord_bot.services.subscription_service import SubscriptionService
 from shared.data_manager import DataManager
@@ -84,19 +84,6 @@ async def handle_start(
     data_manager: DataManager
 ):
     """Handle the start command."""
-    # Check cooldown
-    can_proceed, cooldown_msg = check_cooldown(user_id)
-    if not can_proceed:
-        await message.reply(cooldown_msg)
-        data_manager.log_action(
-            user_id=user_id,
-            user_name=str(message.author),
-            action=ActionType.START,
-            details="Cooldown active",
-            result=ActionResult.DENIED
-        )
-        return
-
     emulator_name = args if args else None
 
     async with message.channel.typing():

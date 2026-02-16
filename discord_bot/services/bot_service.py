@@ -66,6 +66,30 @@ class BotService:
             # Return False on error to be safe - we don't want to start a bot that might already be running
             return False
     
+    def _get_live_emulator_index(self, user) -> int:
+        """
+        Get the live emulator index for a user by resolving their emulator name.
+        Updates stored index if stale. Falls back to stored index if resolution fails.
+        """
+        if not user.emulator_name:
+            return user.emulator_index
+        try:
+            emulator_state = self.whalesbot.get_emulator_state_by_name(user.emulator_name)
+            if emulator_state:
+                live_index = emulator_state.index
+                if live_index != user.emulator_index:
+                    # Update stale index in user's emulators list
+                    emu_entry = user.get_emulator_by_name(user.emulator_name)
+                    if emu_entry:
+                        emu_entry['index'] = live_index
+                    self.data_manager.save_user(user)
+                    print(f"[SYNC] Updated stale index for emulator '{user.emulator_name}' "
+                          f"(user {user.discord_name}): now index {live_index}")
+                return live_index
+        except Exception:
+            pass
+        return user.emulator_index
+
     def _is_admin(self, user_id: str) -> bool:
         """Check if a user ID is an admin."""
         config = self.data_manager.get_config()
@@ -73,10 +97,12 @@ class BotService:
 
     def _resolve_emulator_index(self, user, emulator_name: str, is_admin: bool = False) -> Dict[str, Any]:
         """
-        Resolve an emulator name to an index, verifying the user is linked to it.
+        Resolve an emulator name to a live index by querying WhaleBots.
+        Always queries by name to handle index reordering.
+        Updates stored index if stale.
 
         Args:
-            user: User object
+            user: User object (can be None for admins)
             emulator_name: Name of the emulator to resolve
             is_admin: If True, skip ownership check (admins can control any emulator)
 
@@ -84,15 +110,7 @@ class BotService:
             Dict with 'success', 'index', and optionally 'message'
         """
         try:
-            # Check user's own emulators list first
-            emu_entry = user.get_emulator_by_name(emulator_name)
-            if emu_entry:
-                return {
-                    'success': True,
-                    'index': emu_entry['index']
-                }
-
-            # Not in user's list — check if the emulator exists
+            # Always query WhaleBots for the live index by name
             emulator_state = self.whalesbot.get_emulator_state_by_name(emulator_name)
             if not emulator_state:
                 return {
@@ -100,16 +118,33 @@ class BotService:
                     'message': f'Emulator "{emulator_name}" not found.'
                 }
 
-            # Admins can control any emulator
-            if is_admin:
-                return {
-                    'success': True,
-                    'index': emulator_state.index
-                }
+            live_index = emulator_state.index
+
+            # Check ownership (unless admin)
+            if user:
+                emu_entry = user.get_emulator_by_name(emulator_name)
+                if emu_entry:
+                    # Update stored index if it's stale
+                    if emu_entry['index'] != live_index:
+                        emu_entry['index'] = live_index
+                        self.data_manager.save_user(user)
+                        print(f"[SYNC] Updated stale index for emulator '{emulator_name}' "
+                              f"(user {user.discord_name}): now index {live_index}")
+                    return {
+                        'success': True,
+                        'index': live_index
+                    }
+
+                # Not in user's list
+                if not is_admin:
+                    return {
+                        'success': False,
+                        'message': f'You are not linked to emulator "{emulator_name}". Use `link {emulator_name}` first.'
+                    }
 
             return {
-                'success': False,
-                'message': f'You are not linked to emulator "{emulator_name}". Use `link {emulator_name}` first.'
+                'success': True,
+                'index': live_index
             }
         except Exception as e:
             return {
@@ -137,40 +172,20 @@ class BotService:
                 'message': "You don't have access. Please contact admin."
             }
 
-        # Resolve emulator index
-        if emulator_name:
-            if not user:
-                # Admin without a user record — resolve directly
-                try:
-                    emulator_state = self.whalesbot.get_emulator_state_by_name(emulator_name)
-                    if not emulator_state:
-                        return {'success': False, 'message': f'Emulator "{emulator_name}" not found.'}
-                    emulator_index = emulator_state.index
-                except Exception as e:
-                    return {'success': False, 'message': f'Error resolving emulator: {str(e)}'}
-            else:
-                resolve_result = self._resolve_emulator_index(user, emulator_name, is_admin=is_admin)
-                if not resolve_result['success']:
-                    return resolve_result
-                emulator_index = resolve_result['index']
-        else:
-            if not user or user.emulator_index == -1:
+        # Resolve emulator — always by name to handle index reordering
+        resolve_name = emulator_name
+        if not resolve_name:
+            if not user or not user.emulator_name:
                 return {
                     'success': False,
                     'message': 'You are not linked to any emulator. Use `link <emulator_name>` to link first.'
                 }
-            emulator_index = user.emulator_index
+            resolve_name = user.emulator_name
 
-        # Attempt to backfill emulator name if missing (non-blocking)
-        if user and not user.emulator_name:
-            try:
-                for state in self.whalesbot.get_emulator_states():
-                    if state.index == user.emulator_index:
-                        user.emulator_name = state.emulator_info.name
-                        self.data_manager.save_user(user)
-                        break
-            except Exception:
-                pass
+        resolve_result = self._resolve_emulator_index(user, resolve_name, is_admin=is_admin)
+        if not resolve_result['success']:
+            return resolve_result
+        emulator_index = resolve_result['index']
 
         # Check subscription (admins bypass)
         if not is_admin and user and user.subscription.is_expired:
@@ -181,9 +196,9 @@ class BotService:
 
         # If queue is available, use queued execution
         if self.use_queue and self.operation_queue:
-            return await self._queued_start_instance(user, emulator_index)
+            return await self._queued_start_instance(user, emulator_index, resolve_name)
 
-        emu_label = emulator_name or (user.emulator_name if user else None) or f"#{emulator_index}"
+        emu_label = resolve_name
 
         try:
             actual_emulator_state = await asyncio.wait_for(
@@ -315,35 +330,26 @@ class BotService:
                 'message': "You don't have access."
             }
 
-        # Resolve emulator index
-        if emulator_name:
-            if not user:
-                # Admin without a user record — resolve directly
-                try:
-                    emulator_state = self.whalesbot.get_emulator_state_by_name(emulator_name)
-                    if not emulator_state:
-                        return {'success': False, 'message': f'Emulator "{emulator_name}" not found.'}
-                    emulator_index = emulator_state.index
-                except Exception as e:
-                    return {'success': False, 'message': f'Error resolving emulator: {str(e)}'}
-            else:
-                resolve_result = self._resolve_emulator_index(user, emulator_name, is_admin=is_admin)
-                if not resolve_result['success']:
-                    return resolve_result
-                emulator_index = resolve_result['index']
-        else:
-            if not user or user.emulator_index == -1:
+        # Resolve emulator — always by name to handle index reordering
+        resolve_name = emulator_name
+        if not resolve_name:
+            if not user or not user.emulator_name:
                 return {
                     'success': False,
                     'message': 'No emulator specified. Use `stop <emulator_name>`.'
                 }
-            emulator_index = user.emulator_index
+            resolve_name = user.emulator_name
+
+        resolve_result = self._resolve_emulator_index(user, resolve_name, is_admin=is_admin)
+        if not resolve_result['success']:
+            return resolve_result
+        emulator_index = resolve_result['index']
 
         # If queue is available, use queued execution
         if self.use_queue and self.operation_queue:
-            return await self._queued_stop_instance(user, emulator_index)
+            return await self._queued_stop_instance(user, emulator_index, resolve_name)
 
-        emu_label = emulator_name or (user.emulator_name if user else None) or f"#{emulator_index}"
+        emu_label = resolve_name
 
         # Check actual emulator state before proceeding (run in thread to avoid blocking)
         try:
@@ -476,7 +482,8 @@ class BotService:
 
         # Check actual emulator state and sync if needed
         if user.emulator_index != -1:
-            actual_emulator_state = self._get_actual_emulator_state(user.emulator_index)
+            live_index = self._get_live_emulator_index(user)
+            actual_emulator_state = self._get_actual_emulator_state(live_index)
 
             # Auto-sync state if inconsistency detected
             state_synced = False
@@ -671,15 +678,24 @@ class BotService:
                     'message': f'Emulator "{emulator_name}" not found.'
                 }
 
-            # Link emulator
-            old_emulator = user.emulator_name or f"Unlinked (Index {user.emulator_index})"
-            user.emulator_index = emulator_state.index
-            user.emulator_name = emulator_state.emulator_info.name
+            # Check if already linked to this emulator
+            existing = user.get_emulator_by_name(emulator_state.emulator_info.name)
+            if existing:
+                return {
+                    'success': False,
+                    'message': f'Already linked to emulator "{emulator_name}".'
+                }
+
+            # Add emulator to user's list (supports multiple emulators)
+            user.emulators.append({
+                'index': emulator_state.index,
+                'name': emulator_state.emulator_info.name
+            })
             self.data_manager.save_user(user)
 
             return {
                 'success': True,
-                'message': f'Successfully linked to emulator "{emulator_name}"!\nOld: {old_emulator}\nNew: {user.emulator_name} (Index {user.emulator_index})'
+                'message': f'Successfully linked to emulator "{emulator_state.emulator_info.name}"!\nYou now have {len(user.emulators)} linked emulator(s).'
             }
 
         except Exception as e:
@@ -805,19 +821,20 @@ class BotService:
             self._whalesbot.cleanup()
             self._whalesbot = None
 
-    async def _queued_start_instance(self, user: User, emulator_index: int = None) -> Dict[str, Any]:
+    async def _queued_start_instance(self, user: User, emulator_index: int, emu_label: str = None) -> Dict[str, Any]:
         """
         Start instance using queue system.
 
         Args:
             user: User object
-            emulator_index: Emulator index to start (defaults to user.emulator_index)
+            emulator_index: Emulator index to start
+            emu_label: Display name for the emulator
 
         Returns:
             Result dictionary with success status and message
         """
-        if emulator_index is None:
-            emulator_index = user.emulator_index
+        if emu_label is None:
+            emu_label = (user.emulator_name if user else None) or f"#{emulator_index}"
         # Check if user already has pending operations
         pending_ops = self.operation_queue.get_pending_operations()
         user_pending = [op for op in pending_ops if op['user_name'] == user.discord_name]
@@ -827,8 +844,6 @@ class BotService:
                 'success': False,
                 'message': f'You already have a pending operation in the queue (position #{user_pending[0]["queue_position"]}).'
             }
-
-        emu_label = (user.emulator_name if user else None) or f"#{emulator_index}"
 
         # Create start operation callback
         async def start_operation():
@@ -926,19 +941,20 @@ class BotService:
                 'message': f'Operation failed: {result.error or "Unknown error"}'
             }
 
-    async def _queued_stop_instance(self, user: User, emulator_index: int = None) -> Dict[str, Any]:
+    async def _queued_stop_instance(self, user: User, emulator_index: int, emu_label: str = None) -> Dict[str, Any]:
         """
         Stop instance using queue system.
 
         Args:
             user: User object
-            emulator_index: Emulator index to stop (defaults to user.emulator_index)
+            emulator_index: Emulator index to stop
+            emu_label: Display name for the emulator
 
         Returns:
             Result dictionary with success status and message
         """
-        if emulator_index is None:
-            emulator_index = user.emulator_index
+        if emu_label is None:
+            emu_label = (user.emulator_name if user else None) or f"#{emulator_index}"
         # Check if user already has pending operations
         pending_ops = self.operation_queue.get_pending_operations()
         user_pending = [op for op in pending_ops if op['user_name'] == user.discord_name]
@@ -948,8 +964,6 @@ class BotService:
                 'success': False,
                 'message': f'You already have a pending operation in the queue (position #{user_pending[0]["queue_position"]}).'
             }
-
-        emu_label = (user.emulator_name if user else None) or f"#{emulator_index}"
 
         # Create stop operation callback
         async def stop_operation():

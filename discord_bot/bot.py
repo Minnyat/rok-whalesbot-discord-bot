@@ -245,7 +245,8 @@ class WhaleBotDiscord(discord.Bot):
 
                 # Get actual emulator state
                 try:
-                    actual_state = self.bot_service._get_actual_emulator_state(user.emulator_index)
+                    live_index = self.bot_service._get_live_emulator_index(user)
+                    actual_state = self.bot_service._get_actual_emulator_state(live_index)
 
                     # Check for inconsistencies
                     if user.is_running and not actual_state:

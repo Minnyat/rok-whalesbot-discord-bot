@@ -519,7 +519,7 @@ def setup_admin_commands(
             return
 
         if existing_user.is_running:
-            stop_result = bot_service.force_stop_instance(str(user.id))
+            stop_result = await bot_service.force_stop_instance(str(user.id))
             if not stop_result['success']:
                 await ctx.followup.send(f"Cannot stop current bot: {stop_result['message']}", ephemeral=True)
                 return
@@ -647,7 +647,7 @@ def setup_admin_commands(
             return
 
         if current_user.is_running:
-            stop_result = bot_service.force_stop_instance(str(user.id))
+            stop_result = await bot_service.force_stop_instance(str(user.id))
             if not stop_result['success']:
                 await ctx.followup.send(f"Cannot stop current bot: {stop_result['message']}", ephemeral=True)
                 return
@@ -703,7 +703,7 @@ def setup_admin_commands(
             return
 
         if current_user.is_running:
-            stop_result = bot_service.force_stop_instance(str(user.id))
+            stop_result = await bot_service.force_stop_instance(str(user.id))
             if not stop_result['success']:
                 await ctx.followup.send(f"Cannot stop current bot: {stop_result['message']}", ephemeral=True)
                 return
@@ -759,7 +759,7 @@ def setup_admin_commands(
         for user in expired_users:
             try:
                 if user.is_running:
-                    stop_result = bot_service.force_stop_instance(str(user.discord_id))
+                    stop_result = await bot_service.force_stop_instance(str(user.discord_id))
                     if not stop_result['success']:
                         error_count += 1
                         details.append(f"Failed {user.discord_name}: Cannot stop bot")
