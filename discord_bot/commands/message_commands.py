@@ -15,7 +15,7 @@ from shared.constants import ActionType, ActionResult
 
 
 # Commands that the bot recognizes (no prefix)
-COMMANDS = {'start', 'stop', 'status', 'expiry', 'link', 'help', 'queue'}
+COMMANDS = {'start', 'stop', 'status', 'expiry', 'link', 'help', 'queue', 'view'}
 
 
 def setup_message_commands(
@@ -74,6 +74,8 @@ def setup_message_commands(
             await handle_help(message)
         elif command == "queue":
             await handle_queue(message, user_id, bot)
+        elif command == "view":
+            await handle_view(message, user_id, args, bot_service, data_manager)
 
 
 async def handle_start(
@@ -227,6 +229,43 @@ async def handle_link(
     await message.reply(result['message'])
 
 
+async def handle_view(
+    message: discord.Message,
+    user_id: str,
+    args: str,
+    bot_service: BotService,
+    data_manager: DataManager
+):
+    """Handle the view command - screenshot an emulator."""
+    if not args:
+        await message.reply("Usage: `view <emulator_name>`")
+        return
+
+    emulator_name = args
+
+    # Check ownership or admin
+    is_admin = bot_service._is_admin(user_id)
+    if not is_admin:
+        user = data_manager.get_user(user_id)
+        if not user:
+            await message.reply("You don't have access. Please contact admin.")
+            return
+        emu_entry = user.get_emulator_by_name(emulator_name)
+        if not emu_entry:
+            await message.reply(f'You are not linked to emulator "{emulator_name}".')
+            return
+
+    async with message.channel.typing():
+        result = await bot_service.screenshot_emulator(emulator_name)
+
+    if not result['success']:
+        await message.reply(result['message'])
+        return
+
+    file = discord.File(result['image'], filename=f"{result['name']}.png")
+    await message.reply(file=file)
+
+
 async def handle_help(message: discord.Message):
     """Handle the help command."""
     help_text = (
@@ -238,6 +277,7 @@ async def handle_help(message: discord.Message):
         "`stop` - Stop your miner\n"
         "`stop <name>` - Stop a specific emulator\n"
         "`status` - Check miner status\n"
+        "`view <name>` - Screenshot an emulator\n"
         "`expiry` - View subscription info\n"
         "\n"
         "**Emulator Management**\n"

@@ -2,11 +2,16 @@
 Bot service for managing WhaleBots instances.
 """
 
+import io
 import os
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
 import pytz
+from PIL import Image
+import win32gui
+import win32ui
+import win32con
 
 from whalebots_automation import WhaleBots
 from whalebots_automation.exceptions import (
@@ -814,6 +819,146 @@ class BotService:
             return self.whalesbot
         except Exception:
             return None
+
+    @staticmethod
+    def _find_emulator_hwnd(emulator_name: str) -> Optional[int]:
+        """
+        Find the BlueStacks emulator window handle by its display name.
+
+        BlueStacks windows have class 'Qt672QWindowIcon' and their title
+        matches the emulator display name configured in WhaleBots.
+
+        Args:
+            emulator_name: Display name of the emulator (e.g. 'MinHe')
+
+        Returns:
+            Window handle (hwnd) or None if not found
+        """
+        result = []
+
+        def callback(hwnd, _):
+            if win32gui.GetClassName(hwnd) == 'Qt672QWindowIcon':
+                if win32gui.GetWindowText(hwnd) == emulator_name:
+                    result.append(hwnd)
+
+        win32gui.EnumWindows(callback, None)
+        return result[0] if result else None
+
+    @staticmethod
+    def _get_game_viewport(hwnd: int):
+        """
+        Find the game viewport rect within the parent BlueStacks window.
+
+        The BlueStacks parent window contains chrome (top bar, right toolbar).
+        The actual game renders in a 'BlueStacksApp' child window. We return
+        the child's position relative to the parent's client area so BitBlt
+        on the parent can be cropped to just the game content.
+
+        Returns:
+            (x, y, w, h) of the game viewport in parent client coords,
+            or None to use the full client area as fallback.
+        """
+        children = []
+
+        def child_cb(child_hwnd, _):
+            if win32gui.GetClassName(child_hwnd) == 'BlueStacksApp':
+                children.append(child_hwnd)
+
+        win32gui.EnumChildWindows(hwnd, child_cb, None)
+        if not children:
+            return None
+
+        child_rect = win32gui.GetWindowRect(children[0])
+        # Convert child's screen coords to parent's client coords
+        x, y = win32gui.ScreenToClient(hwnd, (child_rect[0], child_rect[1]))
+        w = child_rect[2] - child_rect[0]
+        h = child_rect[3] - child_rect[1]
+        return (x, y, w, h)
+
+    def _capture_window(self, hwnd: int) -> Image.Image:
+        """
+        Capture the game viewport from a BlueStacks window using BitBlt.
+
+        Captures the full parent client area (which includes GPU-rendered game
+        content) then crops to just the game viewport, excluding the BlueStacks
+        top bar and right toolbar.
+
+        Args:
+            hwnd: Window handle to capture
+
+        Returns:
+            PIL Image of the game viewport
+        """
+        left, top, right, bottom = win32gui.GetClientRect(hwnd)
+        w = right - left
+        h = bottom - top
+
+        client_dc = win32gui.GetDC(hwnd)
+        mfc_dc = win32ui.CreateDCFromHandle(client_dc)
+        save_dc = mfc_dc.CreateCompatibleDC()
+        bitmap = win32ui.CreateBitmap()
+        bitmap.CreateCompatibleBitmap(mfc_dc, w, h)
+        save_dc.SelectObject(bitmap)
+
+        save_dc.BitBlt((0, 0), (w, h), mfc_dc, (0, 0), win32con.SRCCOPY)
+
+        bmp_info = bitmap.GetInfo()
+        bmp_bits = bitmap.GetBitmapBits(True)
+        img = Image.frombuffer(
+            'RGB',
+            (bmp_info['bmWidth'], bmp_info['bmHeight']),
+            bmp_bits, 'raw', 'BGRX', 0, 1,
+        )
+
+        win32gui.DeleteObject(bitmap.GetHandle())
+        save_dc.DeleteDC()
+        mfc_dc.DeleteDC()
+        win32gui.ReleaseDC(hwnd, client_dc)
+
+        # Crop to game viewport (exclude BlueStacks chrome)
+        viewport = self._get_game_viewport(hwnd)
+        if viewport:
+            vx, vy, vw, vh = viewport
+            img = img.crop((vx, vy, vx + vw, vy + vh))
+
+        return img
+
+    async def screenshot_emulator(self, emulator_name: str) -> Dict[str, Any]:
+        """
+        Take a screenshot of an emulator window and return the right 1/3 cropped image.
+
+        Uses Win32 BitBlt to capture the BlueStacks window by its display name,
+        which works without bringing the window to the foreground.
+
+        Args:
+            emulator_name: Name of the emulator to screenshot
+
+        Returns:
+            Dict with 'success', 'image' (BytesIO), and 'name'
+        """
+        try:
+            emulator_state = self.whalesbot.get_emulator_state_by_name(emulator_name)
+            if not emulator_state:
+                return {'success': False, 'message': f'Emulator "{emulator_name}" not found.'}
+
+            hwnd = await asyncio.to_thread(self._find_emulator_hwnd, emulator_name)
+            if not hwnd:
+                return {'success': False, 'message': f'Window not found for emulator "{emulator_name}".'}
+
+            img = await asyncio.to_thread(self._capture_window, hwnd)
+
+            width, height = img.size
+            left = width * 2 // 3
+            cropped = img.crop((left, 0, width, height))
+
+            buf = io.BytesIO()
+            cropped.save(buf, format='PNG')
+            buf.seek(0)
+
+            return {'success': True, 'image': buf, 'name': emulator_name}
+
+        except Exception as e:
+            return {'success': False, 'message': f'Screenshot error: {str(e)}'}
 
     def cleanup(self) -> None:
         """Cleanup WhaleBots instance."""
