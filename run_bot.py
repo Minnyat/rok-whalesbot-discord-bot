@@ -17,8 +17,34 @@ def _app_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _enable_dpi_awareness() -> None:
+    # Without this, on monitors with display scaling > 100%, GetWindowRect /
+    # ScreenToClient return virtualized coords while BitBlt captures physical
+    # pixels, producing a zoomed-in crop of the emulator window.
+    if sys.platform != "win32":
+        return
+    import ctypes
+    try:
+        # Per-monitor DPI aware v2 (Windows 10 1703+)
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        return
+    except (AttributeError, OSError):
+        pass
+    try:
+        # Per-monitor DPI aware (Windows 8.1+)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except (AttributeError, OSError):
+        pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
+
+
 def main():
     """Main entry point for Discord bot."""
+    _enable_dpi_awareness()
     script_dir = _app_dir()
     env_path = os.path.join(script_dir, '.env')
 

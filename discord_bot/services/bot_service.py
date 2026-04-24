@@ -925,7 +925,7 @@ class BotService:
 
     async def screenshot_emulator(self, emulator_name: str) -> Dict[str, Any]:
         """
-        Take a screenshot of an emulator window and return the right 1/3 cropped image.
+        Take a screenshot of an emulator window and return the full image.
 
         Uses Win32 BitBlt to capture the BlueStacks window by its display name,
         which works without bringing the window to the foreground.
@@ -947,12 +947,8 @@ class BotService:
 
             img = await asyncio.to_thread(self._capture_window, hwnd)
 
-            width, height = img.size
-            left = width * 2 // 3
-            cropped = img.crop((left, 0, width, height))
-
             buf = io.BytesIO()
-            cropped.save(buf, format='PNG')
+            img.save(buf, format='PNG')
             buf.seek(0)
 
             return {'success': True, 'image': buf, 'name': emulator_name}
