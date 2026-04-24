@@ -3,14 +3,22 @@ Flask dashboard launcher script.
 """
 
 import os
+import sys
 from dotenv import load_dotenv
 from web_dashboard.app import create_app
 
 
+def _app_dir() -> str:
+    # When frozen by PyInstaller --onefile, __file__ points to the temp
+    # extraction dir; the user's .env lives next to the .exe instead.
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def main():
     """Main entry point for Flask dashboard."""
-    # Get the directory where this script is located
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = _app_dir()
     env_path = os.path.join(script_dir, '.env')
     
     # Load environment variables from .env file
