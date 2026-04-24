@@ -14,7 +14,11 @@ from shared.constants import InstanceStatus
 from discord_bot.services.bot_service import BotService
 from discord_bot.services.subscription_service import SubscriptionService
 from discord_bot.services.ui_operation_queue import UIOperationQueue
-from discord_bot.utils.permissions import init_permission_checker
+from discord_bot.utils.permissions import (
+    init_permission_checker,
+    get_instance_channel_ids,
+    channel_matches_instance,
+)
 from discord_bot.commands.message_commands import setup_message_commands
 from discord_bot.commands.admin_commands import setup_admin_commands
 
@@ -55,10 +59,63 @@ class WhaleBotDiscord(discord.Bot):
         setup_message_commands(self, self.bot_service, self.subscription_service, self.data_manager)
         setup_admin_commands(self, self.bot_service, self.subscription_service, self.data_manager)
     
+    def _validate_instance_channels(self, bound_channels):
+        """Warn if any INSTANCE_CHANNEL ID can't be resolved to a visible channel.
+
+        Doesn't abort startup — misconfiguration is loud but non-fatal so the
+        operator can fix .env and reconnect without needing to kill the process
+        via a crash loop.
+        """
+        unresolved = []
+        not_integer = []
+        for raw_id in bound_channels:
+            try:
+                cid = int(raw_id)
+            except ValueError:
+                not_integer.append(raw_id)
+                continue
+            if self.get_channel(cid) is None:
+                unresolved.append(raw_id)
+
+        if not_integer:
+            print(
+                f"[ERROR] INSTANCE_CHANNEL contains non-numeric value(s): "
+                f"{', '.join(not_integer)} — channel IDs must be numeric."
+            )
+        if unresolved:
+            print(
+                f"[ERROR] INSTANCE_CHANNEL id(s) not visible to this bot: "
+                f"{', '.join(unresolved)} — check the ID is correct and the bot "
+                f"is a member of that channel's guild. This instance will stay "
+                f"silent until the ID resolves."
+            )
+        if not not_integer and not unresolved:
+            print(f"[OK] All {len(bound_channels)} INSTANCE_CHANNEL id(s) resolved")
+
+    async def process_application_commands(self, interaction, auto_sync=None):
+        """Route slash commands only when the interaction is in this PC's channel.
+
+        With the same bot token running on multiple PCs, every instance receives
+        every interaction. Dropping interactions outside INSTANCE_CHANNEL ensures
+        exactly one PC responds (the one bound to the command's channel). If
+        INSTANCE_CHANNEL is unset, this process handles everything.
+        """
+        channel_id = str(interaction.channel_id) if interaction.channel_id else None
+        if not channel_matches_instance(channel_id):
+            return
+        await super().process_application_commands(interaction, auto_sync)
+
     async def on_ready(self):
         """Handle bot ready event."""
         print(f"[OK] Bot logged in as {self.user}")
         print(f"[OK] Connected to {len(self.guilds)} guilds")
+
+        bound_channels = get_instance_channel_ids()
+        if bound_channels:
+            print(f"[OK] Instance bound to channel(s): {', '.join(sorted(bound_channels))}")
+            self._validate_instance_channels(bound_channels)
+        else:
+            print("[INFO] INSTANCE_CHANNEL not set — handling every channel (single-PC mode)")
 
         # Sync slash commands
         print("[INFO] Syncing slash commands...")

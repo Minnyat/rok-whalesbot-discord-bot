@@ -2,12 +2,35 @@
 Permission checking utilities for Discord bot.
 """
 
+import os
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 import pytz
 import discord
 
 from shared.data_manager import DataManager
+
+
+def get_instance_channel_ids() -> Set[str]:
+    """Read INSTANCE_CHANNEL env var as a set of channel IDs.
+
+    Empty set means "no instance binding" — this process listens everywhere.
+    """
+    raw = os.getenv("INSTANCE_CHANNEL", "").strip()
+    if not raw:
+        return set()
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def channel_matches_instance(channel_id: Optional[str]) -> bool:
+    """Return True if channel_id falls within this PC's INSTANCE_CHANNEL binding.
+
+    If no binding is set, every channel matches.
+    """
+    allowed = get_instance_channel_ids()
+    if not allowed:
+        return True
+    return channel_id is not None and channel_id in allowed
 
 
 class PermissionChecker:
@@ -33,11 +56,17 @@ class PermissionChecker:
         return False
     
     def in_allowed_location(self, ctx: discord.ApplicationContext) -> tuple[bool, Optional[str]]:
+        # Per-PC binding takes precedence: if this process is bound to specific
+        # channels via INSTANCE_CHANNEL, refuse anything outside them so other
+        # PCs (sharing the same bot token) handle their own channels instead.
+        if not channel_matches_instance(str(ctx.channel.id) if ctx.channel else None):
+            return False, "This channel is not handled by this bot instance."
+
         config = self.data_manager.get_config()
-        
+
         if not config.allowed_guilds and not config.allowed_channels:
             return True, None
-        
+
         if config.allowed_guilds:
             if not ctx.guild:
                 return False, "This command can only be used in allowed servers."
@@ -53,6 +82,9 @@ class PermissionChecker:
     
     def in_allowed_location_msg(self, message: discord.Message) -> tuple[bool, Optional[str]]:
         """Check if a message is in an allowed location (guild/channel)."""
+        if not channel_matches_instance(str(message.channel.id) if message.channel else None):
+            return False, "This channel is not handled by this bot instance."
+
         config = self.data_manager.get_config()
 
         if not config.allowed_guilds and not config.allowed_channels:
